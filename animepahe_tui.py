@@ -399,11 +399,14 @@ class TaskManager:
                 
                 self.add_log(f"Downloading stream via yt-dlp to {filename}...")
                 
-                # Setup yt-dlp process dynamically
-                python_dir = os.path.dirname(sys.executable)
-                yt_dlp_bin = os.path.join(python_dir, "yt-dlp")
+                # Setup yt-dlp process dynamically (check local .venv first)
+                script_dir = os.path.dirname(os.path.abspath(__file__))
+                yt_dlp_bin = os.path.join(script_dir, ".venv", "bin", "yt-dlp")
                 if not os.path.exists(yt_dlp_bin):
-                    yt_dlp_bin = "yt-dlp"
+                    python_dir = os.path.dirname(sys.executable)
+                    yt_dlp_bin = os.path.join(python_dir, "yt-dlp")
+                    if not os.path.exists(yt_dlp_bin):
+                        yt_dlp_bin = "yt-dlp"
                 cmd = [
                     yt_dlp_bin,
                     "--add-header", "Referer: https://kwik.cx/",
@@ -447,11 +450,14 @@ class TaskManager:
             self.add_log(f"Starting Whisper transcription for: {os.path.basename(task['filepath'])}")
             
             try:
-                # Build stable-ts command dynamically
-                python_dir = os.path.dirname(sys.executable)
-                stable_ts_bin = os.path.join(python_dir, "stable-ts")
+                # Build stable-ts command dynamically (check local .venv first)
+                script_dir = os.path.dirname(os.path.abspath(__file__))
+                stable_ts_bin = os.path.join(script_dir, ".venv", "bin", "stable-ts")
                 if not os.path.exists(stable_ts_bin):
-                    stable_ts_bin = "stable-ts"
+                    python_dir = os.path.dirname(sys.executable)
+                    stable_ts_bin = os.path.join(python_dir, "stable-ts")
+                    if not os.path.exists(stable_ts_bin):
+                        stable_ts_bin = "stable-ts"
                 cmd = [
                     stable_ts_bin,
                     task['filepath'],
