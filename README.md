@@ -59,7 +59,7 @@ Ensure the following dependencies are installed globally on your system:
 
 Due to Cloudflare protection on AnimePahe, you must provide your browser's clearance cookie and User-Agent:
 
-1. Visit [animepahe.pw](https://animepahe.pw) in your browser and verify you are not a bot.
+1. Visit animepahe website in your browser and verify you are not a bot.
 2. Open Developer Tools (`F12`) -> Go to the **Network** tab.
 3. Refresh the page and inspect any request header to copy:
    - Your browser's **User-Agent** string.
