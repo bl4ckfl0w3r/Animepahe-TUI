@@ -1,0 +1,23 @@
+# Python environment and caches
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Local configuration (contains cookies)
+config.json
+
+# Local caches
+anime.list
+.source.json
+*.source.json
+
+# Cloned repository dependency
+animepahe-dl/
+
+# Downloaded media files and subtitles
+*.mp4
+*.mkv
+*.webm
+*.srt
+*.vtt
