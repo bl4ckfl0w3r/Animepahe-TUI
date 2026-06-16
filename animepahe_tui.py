@@ -15,12 +15,14 @@ import glob
 CONFIG_FILE = "config.json"
 DEFAULT_RESOLUTION = "1080"
 DEFAULT_AUDIO = "jpn"
+DEFAULT_MODEL = "large-v3-turbo"
 RESOLUTIONS = ["1080", "720", "480", "360"]
 AUDIOS = ["jpn", "eng"]
+MODELS = ["large-v3-turbo", "large-v3", "medium", "small", "base", "tiny"]
 
 def load_config():
     """Load configuration from config.json, falling back to animepahe-dl config if needed."""
-    cf, ua, audio, resolution = "", "", DEFAULT_AUDIO, DEFAULT_RESOLUTION
+    cf, ua, audio, resolution, model = "", "", DEFAULT_AUDIO, DEFAULT_RESOLUTION, DEFAULT_MODEL
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, "r") as f:
@@ -29,7 +31,8 @@ def load_config():
                 ua = data.get("ua", "")
                 audio = data.get("audio", DEFAULT_AUDIO)
                 resolution = data.get("resolution", DEFAULT_RESOLUTION)
-                return cf, ua, audio, resolution
+                model = data.get("model", DEFAULT_MODEL)
+                return cf, ua, audio, resolution, model
         except Exception:
             pass
 
@@ -44,15 +47,16 @@ def load_config():
         except Exception:
             pass
             
-    return cf, ua, audio, resolution
+    return cf, ua, audio, resolution, model
 
-def save_config(cf, ua, audio, resolution):
+def save_config(cf, ua, audio, resolution, model):
     """Save configuration to config.json."""
     data = {
         "cf": cf,
         "ua": ua,
         "audio": audio,
-        "resolution": resolution
+        "resolution": resolution,
+        "model": model
     }
     with open(CONFIG_FILE, "w") as f:
         json.dump(data, f, indent=2)
@@ -279,7 +283,7 @@ class TaskManager:
         self.download_queue.put(None)
         self.transcribe_queue.put(None)
         
-    def queue_download(self, anime_title, anime_slug, episode_num, episode_session, resolution, audio, transcribe_on_complete=False):
+    def queue_download(self, anime_title, anime_slug, episode_num, episode_session, resolution, audio, transcribe_on_complete=False, model="large-v3-turbo"):
         # Check if already queued
         for task in list(self.download_queue.queue):
             if task and task['anime_slug'] == anime_slug and task['episode_num'] == episode_num:
@@ -295,13 +299,14 @@ class TaskManager:
             'resolution': resolution,
             'audio': audio,
             'transcribe_on_complete': transcribe_on_complete,
+            'model': model,
             'status': 'Queued'
         }
         self.download_queue.put(task)
         self.add_log(f"Queued download: {anime_title} - Ep {episode_num}")
         return True
         
-    def queue_transcribe(self, anime_title, episode_num, filepath):
+    def queue_transcribe(self, anime_title, episode_num, filepath, audio="eng", model="large-v3-turbo"):
         # Check if already queued
         for task in list(self.transcribe_queue.queue):
             if task and task['filepath'] == filepath:
@@ -313,11 +318,13 @@ class TaskManager:
             'anime_title': anime_title,
             'episode_num': episode_num,
             'filepath': filepath,
+            'audio': audio,
+            'model': model,
             'status': 'Queued',
             'current_time': ''
         }
         self.transcribe_queue.put(task)
-        self.add_log(f"Queued Whisper: {os.path.basename(filepath)}")
+        self.add_log(f"Queued Whisper ({model}): {os.path.basename(filepath)} ({audio.upper()})")
         return True
         
     def get_status(self, anime_title, episode_num, resolution, audio):
@@ -430,7 +437,7 @@ class TaskManager:
                     self.add_log(f"Download completed: {filename}")
                     
                     if task['transcribe_on_complete']:
-                        self.queue_transcribe(task['anime_title'], task['episode_num'], output_path)
+                        self.queue_transcribe(task['anime_title'], task['episode_num'], output_path, task['audio'], model=task.get('model', 'large-v3-turbo'))
                 else:
                     raise Exception(f"FFmpeg exited with code {process.returncode}")
                     
@@ -447,7 +454,7 @@ class TaskManager:
                 break
                 
             self.active_transcribe = task
-            self.add_log(f"Starting Whisper transcription for: {os.path.basename(task['filepath'])}")
+            self.add_log(f"Starting Whisper ({task.get('model', 'large-v3-turbo')}) transcription for: {os.path.basename(task['filepath'])}")
             
             try:
                 # Build stable-ts command dynamically (check local .venv first)
@@ -458,14 +465,26 @@ class TaskManager:
                     stable_ts_bin = os.path.join(python_dir, "stable-ts")
                     if not os.path.exists(stable_ts_bin):
                         stable_ts_bin = "stable-ts"
+                # Common transcription options to prevent loops and skipping dialogue
+                extra_opts = [
+                    "--condition_on_previous_text", "False",
+                    "--no_speech_threshold", "0.8"
+                ]
+                
+                audio_lang = task.get('audio', 'eng')
+                if audio_lang == "jpn":
+                    cmd_opts = ["--language", "ja", "--task", "translate"] + extra_opts
+                else:
+                    cmd_opts = ["--language", "en", "--task", "transcribe"] + extra_opts
+                    
                 cmd = [
                     stable_ts_bin,
                     task['filepath'],
-                    "-m", "large-v3-turbo",
+                    "-m", task.get('model', 'large-v3-turbo'),
                     "--word_timestamps", "True",
                     "--output_format", "srt",
                     "--word_level", "False"
-                ]
+                ] + cmd_opts
                 
                 process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
                 
@@ -537,7 +556,7 @@ def curses_input(stdscr, y, x, prompt, initial_text="", max_len=4096):
     stdscr.nodelay(True)
     return "".join(text) if text is not None else None
 
-def draw_header(stdscr, preferred_audio, preferred_resolution, active_anime=None):
+def draw_header(stdscr, preferred_audio, preferred_resolution, preferred_model, active_anime=None):
     max_y, max_x = stdscr.getmaxyx()
     
     # Border-like line at top
@@ -546,7 +565,7 @@ def draw_header(stdscr, preferred_audio, preferred_resolution, active_anime=None
     
     # Title & Config
     title = " Animepahe-TUI - Downloader & Subtitle Generator "
-    config_str = f" [Language: {preferred_audio.upper()}] [Resolution: {preferred_resolution}p] "
+    config_str = f" [Language: {preferred_audio.upper()}] [Resolution: {preferred_resolution}p] [Model: {preferred_model}] "
     
     stdscr.addstr(0, 2, title, curses.color_pair(2) | curses.A_BOLD)
     stdscr.addstr(0, max_x - len(config_str) - 2, config_str, curses.color_pair(4))
@@ -614,7 +633,7 @@ def main_tui(stdscr):
     current_state = STATE_SEARCH
     
     # Load config
-    cf, ua, audio, resolution = load_config()
+    cf, ua, audio, resolution, model = load_config()
     
     # If config missing, force setup
     if not cf or not ua:
@@ -665,7 +684,7 @@ def main_tui(stdscr):
         
         # Draw setup screen
         if current_state == STATE_SETUP:
-            draw_header(stdscr, audio, resolution)
+            draw_header(stdscr, audio, resolution, model)
             
             # Display instructions
             inst_y = 4
@@ -704,7 +723,7 @@ def main_tui(stdscr):
             
         # Draw Search screen
         elif current_state == STATE_SEARCH:
-            draw_header(stdscr, audio, resolution, active_anime)
+            draw_header(stdscr, audio, resolution, model, active_anime)
             
             # Draw search bar
             stdscr.addstr(4, 2, "Search Anime: ", curses.color_pair(2) | curses.A_BOLD)
@@ -744,7 +763,7 @@ def main_tui(stdscr):
             
         # Draw Episode list screen
         elif current_state == STATE_EPISODES:
-            draw_header(stdscr, audio, resolution, active_anime)
+            draw_header(stdscr, audio, resolution, model, active_anime)
             
             # Split screen into left (episode list) and right (details and queues)
             col_width = int(max_x * 0.6)
@@ -848,12 +867,12 @@ def main_tui(stdscr):
             stdscr.addstr(15, right_x+2, f"Selected: {len(episode_selections)} episodes", curses.color_pair(4) | curses.A_BOLD)
             
             # Help prompt
-            legend = "Space: Toggle | A: Select All | C: Clear | L: Lang | R: Res | D: Download | T: Subtitle | P: Play | S: Search | V: Logs | Q: Quit"
+            legend = "Space: Toggle | A: Select All | C: Clear | L: Lang | R: Res | M: Model | D: Download | T: Subtitle | P: Play | S: Search | V: Logs | Q: Quit"
             draw_footer(stdscr, legend)
             
         # Draw logs screen
         elif current_state == STATE_LOGS:
-            draw_header(stdscr, audio, resolution, active_anime)
+            draw_header(stdscr, audio, resolution, model, active_anime)
             
             stdscr.addstr(4, 2, "══ Background Logs (Ffmpeg / Whisper) ══ (Press [Any Key] to Close)", curses.color_pair(2) | curses.A_BOLD)
             
@@ -913,7 +932,7 @@ def main_tui(stdscr):
             elif ch in (ord('s'), ord('S')):
                 if cf_input and ua_input:
                     cf, ua = cf_input, ua_input
-                    save_config(cf, ua, audio, resolution)
+                    save_config(cf, ua, audio, resolution, model)
                     # Start / reinitialize client and tasks
                     client = AnimePaheClient(cf, ua)
                     task_manager.start(client)
@@ -993,12 +1012,17 @@ def main_tui(stdscr):
             elif ch in (ord('l'), ord('L')):
                 # Toggle language
                 audio = "eng" if audio == "jpn" else "jpn"
-                save_config(cf, ua, audio, resolution)
+                save_config(cf, ua, audio, resolution, model)
             elif ch in (ord('r'), ord('R')):
                 # Toggle resolution
                 curr_idx = RESOLUTIONS.index(resolution)
                 resolution = RESOLUTIONS[(curr_idx + 1) % len(RESOLUTIONS)]
-                save_config(cf, ua, audio, resolution)
+                save_config(cf, ua, audio, resolution, model)
+            elif ch in (ord('m'), ord('M')):
+                # Cycle Whisper model
+                curr_idx = MODELS.index(model)
+                model = MODELS[(curr_idx + 1) % len(MODELS)]
+                save_config(cf, ua, audio, resolution, model)
             elif ch in (ord('d'), ord('D')):
                 # Download selected
                 if not episode_selections:
@@ -1018,7 +1042,8 @@ def main_tui(stdscr):
                             episode_num=ep_num,
                             episode_session=ep_obj['session'],
                             resolution=resolution,
-                            audio=audio
+                            audio=audio,
+                            model=model
                         )
                 # Clear selections after queuing
                 episode_selections.clear()
@@ -1037,8 +1062,9 @@ def main_tui(stdscr):
                     ep_obj = next((e for e in episodes if e.get('episode') == ep_num), None)
                     
                     if local['target_video']:
-                        # Add direct to transcribe queue
-                        task_manager.queue_transcribe(active_anime['title'], ep_num, local['target_video'])
+                        # Add direct to transcribe queue (detect audio language from filename)
+                        local_audio = "eng" if "_eng.mp4" in local['target_video'] else "jpn"
+                        task_manager.queue_transcribe(active_anime['title'], ep_num, local['target_video'], local_audio, model=model)
                     elif ep_obj:
                         # Queue download with transcribe_on_complete=True
                         task_manager.queue_download(
@@ -1048,7 +1074,8 @@ def main_tui(stdscr):
                             episode_session=ep_obj['session'],
                             resolution=resolution,
                             audio=audio,
-                            transcribe_on_complete=True
+                            transcribe_on_complete=True,
+                            model=model
                         )
                         task_manager.add_log(f"Queued download with auto-subtitle trigger for Ep {ep_num}")
                 

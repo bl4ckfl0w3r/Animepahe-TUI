@@ -12,6 +12,7 @@ It is built in Python using the standard `curses` library (no external UI depend
 - **High-Speed HLS Downloads**: Downloads encrypted AES-128 streams using `yt-dlp` and `pycryptodomex` with **parallel threads**, bypassing sequential download throttling.
 - **Flexible Batch Selection**: Options to select and download episodes individually, in custom batches, or an entire season at once.
 - **Automatic Whisper Transcription**: Integrates `stable-ts` (OpenAI Whisper wrapper) to generate clean English subtitles (`.srt` format).
+  - *Model Selection*: Cycle through different Whisper models (such as `large-v3-turbo` (default), `large-v3`, `medium`, `small`, `base`, `tiny`) dynamically to trade speed for accuracy.
   - *Smart Chaining*: Queuing transcription on a non-downloaded episode automatically downloads the video first and fires transcription as soon as it's completed.
 - **Integrated Background Media Player**: Starts playback of selected episodes (as a single file or sequential playlist) in `celluloid` asynchronously.
 - **Live Logs Viewer**: Built-in console logs panel to monitor background download (`yt-dlp`) and transcription (`stable-ts`) stdout/stderr in real-time.
@@ -68,7 +69,7 @@ Due to Cloudflare protection on AnimePahe, you must provide your browser's clear
    - Run `./animepahe_tui.py` directly, which will launch the interactive setup panel.
    - Copy `config.json.example` to `config.json` and paste your tokens there:
      ```bash
-     cp config.json.example config.json
+      cp config.json.example config.json
      ```
 
 ---
@@ -96,6 +97,7 @@ Due to Cloudflare protection on AnimePahe, you must provide your browser's clear
 - `C`: Clear selection.
 - `L`: Toggle preferred audio language (`JPN` / `ENG`).
 - `R`: Toggle preferred resolution (`1080p` / `720p` / `480p` / `360p`).
+- `M`: Cycle preferred Whisper model (`large-v3-turbo` / `large-v3` / `medium` / `small` / `base` / `tiny`).
 - `D`: Queue selected episodes for downloading.
 - `T`: Queue selected episodes for Whisper subtitle transcription (downloads first if missing).
 - `P`: Play selected downloaded video(s) in Celluloid.
