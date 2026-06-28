@@ -484,11 +484,15 @@ class TaskManager:
                 else:
                     cmd_opts = ["--language", "en", "--task", "transcribe"] + extra_opts
                     
-                # Check GPU capability in background thread
+                # Check GPU capability in a clean subprocess to ensure environment variables are inherited at start
                 try:
-                    import torch
-                    has_cuda = torch.cuda.is_available()
-                    gpu_name = torch.cuda.get_device_name(0) if has_cuda else ""
+                    res = subprocess.run(
+                        [sys.executable, "-c", "import torch; print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else '')"],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    lines = res.stdout.strip().split('\n')
+                    has_cuda = (lines[0] == "True") if lines else False
+                    gpu_name = lines[1] if len(lines) > 1 else ""
                 except Exception:
                     has_cuda = False
                     gpu_name = ""
