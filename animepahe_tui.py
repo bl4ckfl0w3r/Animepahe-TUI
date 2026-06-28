@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 import os
 import sys
+
+# Ensure discrete NVIDIA GPU is visible on hybrid graphics laptops
+if "__NV_PRIME_RENDER_OFFLOAD" not in os.environ:
+    os.environ["__NV_PRIME_RENDER_OFFLOAD"] = "1"
+if "__GLX_VENDOR_LIBRARY_NAME" not in os.environ:
+    os.environ["__GLX_VENDOR_LIBRARY_NAME"] = "nvidia"
+
 import re
 import json
 import subprocess
@@ -477,10 +484,26 @@ class TaskManager:
                 else:
                     cmd_opts = ["--language", "en", "--task", "transcribe"] + extra_opts
                     
+                # Check GPU capability in background thread
+                try:
+                    import torch
+                    has_cuda = torch.cuda.is_available()
+                    gpu_name = torch.cuda.get_device_name(0) if has_cuda else ""
+                except Exception:
+                    has_cuda = False
+                    gpu_name = ""
+                
+                device = "cuda" if has_cuda else "cpu"
+                if device == "cpu":
+                    self.add_log("[Whisper] WARNING: CUDA/GPU not detected by PyTorch! Falling back to CPU. This may use massive system RAM and fail.")
+                else:
+                    self.add_log(f"[Whisper] Running on GPU: {gpu_name}")
+
                 cmd = [
                     stable_ts_bin,
                     task['filepath'],
                     "-m", task.get('model', 'large-v3-turbo'),
+                    "--device", device,
                     "--word_timestamps", "True",
                     "--output_format", "srt",
                     "--word_level", "False"
