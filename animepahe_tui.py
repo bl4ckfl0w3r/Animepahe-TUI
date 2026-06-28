@@ -486,16 +486,26 @@ class TaskManager:
                     
                 # Check GPU capability in a clean subprocess to ensure environment variables are inherited at start
                 try:
+                    python_bin = os.path.join(script_dir, ".venv", "bin", "python")
+                    if not os.path.exists(python_bin):
+                        python_bin = sys.executable
+                    
                     res = subprocess.run(
-                        [sys.executable, "-c", "import torch; print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else '')"],
+                        [python_bin, "-c", "import torch; print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else '')"],
                         capture_output=True, text=True, timeout=5
                     )
-                    lines = res.stdout.strip().split('\n')
-                    has_cuda = (lines[0] == "True") if lines else False
-                    gpu_name = lines[1] if len(lines) > 1 else ""
-                except Exception:
+                    if res.returncode == 0:
+                        lines = res.stdout.strip().split('\n')
+                        has_cuda = (lines[0] == "True") if lines else False
+                        gpu_name = lines[1] if len(lines) > 1 else ""
+                    else:
+                        has_cuda = False
+                        gpu_name = ""
+                        self.add_log(f"[Whisper] CUDA check process returned non-zero code {res.returncode}. Stderr: {res.stderr.strip()}")
+                except Exception as e:
                     has_cuda = False
                     gpu_name = ""
+                    self.add_log(f"[Whisper] Failed to run CUDA check: {str(e)}")
                 
                 device = "cuda" if has_cuda else "cpu"
                 if device == "cpu":
@@ -510,7 +520,8 @@ class TaskManager:
                     "--device", device,
                     "--word_timestamps", "True",
                     "--output_format", "srt",
-                    "--word_level", "False"
+                    "--word_level", "False",
+                    "-y"
                 ] + cmd_opts
                 
                 process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
