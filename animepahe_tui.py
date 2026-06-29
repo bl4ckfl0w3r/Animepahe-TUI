@@ -277,6 +277,8 @@ class TaskManager:
                 
     def start(self, client):
         self.client = client
+        if self.running:
+            return
         self.running = True
         
         self.download_thread = threading.Thread(target=self._download_loop, daemon=True)
