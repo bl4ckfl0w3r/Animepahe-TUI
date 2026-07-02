@@ -68,6 +68,71 @@ def save_config(cf, ua, audio, resolution, model):
     with open(CONFIG_FILE, "w") as f:
         json.dump(data, f, indent=2)
 
+def autodetect_firefox_cookie():
+    """Search for cf_clearance cookie for animepahe in Firefox profiles."""
+    import glob
+    import sqlite3
+    import shutil
+    import tempfile
+    
+    search_dirs = [
+        os.path.expanduser("~/.mozilla/firefox"),
+        os.path.expanduser("~/snap/firefox/common/.mozilla/firefox"),
+        os.path.expanduser("~/.var/app/org.mozilla.firefox/.mozilla/firefox"),
+        os.path.expanduser("~/.config/mozilla/firefox")
+    ]
+    
+    sqlite_files = []
+    for d in search_dirs:
+        if os.path.exists(d):
+            sqlite_files.extend(glob.glob(os.path.join(d, "**", "cookies.sqlite"), recursive=True))
+            
+    # Sort files by modification time so we check the most recently modified profile first
+    sqlite_files.sort(key=lambda x: os.path.getmtime(x) if os.path.exists(x) else 0, reverse=True)
+    
+    cf_cookie = None
+    
+    for db_path in sqlite_files:
+        temp_dir = tempfile.mkdtemp()
+        temp_db = os.path.join(temp_dir, "cookies.sqlite")
+        try:
+            shutil.copy2(db_path, temp_db)
+            conn = sqlite3.connect(temp_db)
+            cursor = conn.cursor()
+            query = "SELECT host, name, value FROM moz_cookies WHERE (host LIKE '%animepahe%' OR host LIKE '%pahe%') AND name = 'cf_clearance'"
+            cursor.execute(query)
+            row = cursor.fetchone()
+            if row:
+                cf_cookie = row[2]
+                conn.close()
+                break
+            conn.close()
+        except Exception:
+            pass
+        finally:
+            try:
+                shutil.rmtree(temp_dir)
+            except Exception:
+                pass
+                
+    return cf_cookie
+
+def get_firefox_user_agent():
+    """Get the correct Firefox User-Agent by calling firefox --version."""
+    try:
+        res = subprocess.run(["firefox", "--version"], capture_output=True, text=True, timeout=2)
+        if res.returncode == 0:
+            version = res.stdout.strip().replace("Mozilla Firefox", "").strip()
+            parts = version.split('.')
+            if len(parts) >= 2:
+                short_version = f"{parts[0]}.{parts[1]}"
+            else:
+                short_version = version
+            return f"Mozilla/5.0 (X11; Linux x86_64; rv:{short_version}) Gecko/20100101 Firefox/{short_version}"
+    except Exception:
+        pass
+    return "Mozilla/5.0 (X11; Linux x86_64; rv:151.0) Gecko/20100101 Firefox/151.0"
+
 def clean_filename(title):
     """Clean anime title to make it safe for filenames."""
     cleaned = re.sub(r'[^a-zA-Z0-9\s\(\)\[\]\-\_\.]', '_', title)
@@ -543,7 +608,7 @@ class TaskManager:
                     
                     res = subprocess.run(
                         [python_bin, "-c", "import torch; print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else '')"],
-                        capture_output=True, text=True, timeout=5
+                        capture_output=True, text=True, timeout=30
                     )
                     if res.returncode == 0:
                         lines = res.stdout.strip().split('\n')
@@ -558,11 +623,11 @@ class TaskManager:
                     gpu_name = ""
                     self.add_log(f"[Whisper] Failed to run CUDA check: {str(e)}")
                 
-                device = "cuda" if has_cuda else "cpu"
-                if device == "cpu":
-                    self.add_log("[Whisper] WARNING: CUDA/GPU not detected by PyTorch! Falling back to CPU. This may use massive system RAM and fail.")
-                else:
-                    self.add_log(f"[Whisper] Running on GPU: {gpu_name}")
+                if not has_cuda:
+                    raise Exception("CUDA/GPU not detected by PyTorch! CPU transcription is disabled to prevent system freeze.")
+                
+                self.add_log(f"[Whisper] Running on GPU: {gpu_name}")
+                device = "cuda"
 
                 cmd = [
                     stable_ts_bin,
@@ -724,7 +789,15 @@ def main_tui(stdscr):
     # Load config
     cf, ua, audio, resolution, model = load_config()
     
-    # If config missing, force setup
+    # If config missing, try auto-detecting Firefox cookies first
+    if not cf or not ua:
+        cf_detected = autodetect_firefox_cookie()
+        if cf_detected:
+            cf = cf_detected
+            ua = get_firefox_user_agent()
+            save_config(cf, ua, audio, resolution, model)
+            
+    # If still config missing, force setup
     if not cf or not ua:
         current_state = STATE_SETUP
         
@@ -803,12 +876,13 @@ def main_tui(stdscr):
             
             # Help instructions
             stdscr.addstr(box_y + 5, 2, "Press [Enter] to Edit Field. Press [S] to Save and start.", curses.color_pair(3) | curses.A_BOLD)
+            stdscr.addstr(box_y + 6, 2, "Press [A] to Auto-Detect settings from Firefox.", curses.color_pair(2) | curses.A_BOLD)
             if cf_input and ua_input:
-                stdscr.addstr(box_y + 6, 2, "Config ready! Press [S] to launch.", curses.color_pair(3))
+                stdscr.addstr(box_y + 7, 2, "Config ready! Press [S] to launch.", curses.color_pair(3))
             else:
-                stdscr.addstr(box_y + 6, 2, "Configuration is incomplete.", curses.color_pair(5))
+                stdscr.addstr(box_y + 7, 2, "Configuration is incomplete.", curses.color_pair(5))
                 
-            draw_footer(stdscr, "Tab/Arrows: Select Field | Enter: Edit | S: Save & Close | Q: Quit")
+            draw_footer(stdscr, "Tab/Arrows: Select Field | Enter: Edit | A: Auto-Detect | S: Save | Q: Quit")
             
         # Draw Search screen
         elif current_state == STATE_SEARCH:
@@ -1031,6 +1105,19 @@ def main_tui(stdscr):
                     stdscr.addstr(box_y + 8, 2, "Please fill in both fields before starting!", curses.color_pair(5) | curses.A_BOLD)
                     stdscr.refresh()
                     time.sleep(1.5)
+            elif ch in (ord('a'), ord('A')):
+                stdscr.addstr(box_y + 8, 2, "Auto-detecting from Firefox...", curses.color_pair(4) | curses.A_BOLD)
+                stdscr.refresh()
+                cf_detected = autodetect_firefox_cookie()
+                ua_detected = get_firefox_user_agent()
+                if cf_detected:
+                    cf_input = cf_detected
+                    ua_input = ua_detected
+                    stdscr.addstr(box_y + 8, 2, "Successfully auto-detected credentials!     ", curses.color_pair(3) | curses.A_BOLD)
+                else:
+                    stdscr.addstr(box_y + 8, 2, "Failed to find animepahe cookies in Firefox!  ", curses.color_pair(5) | curses.A_BOLD)
+                stdscr.refresh()
+                time.sleep(1.5)
                     
         elif current_state == STATE_SEARCH:
             if (ch in (10, 13, curses.KEY_ENTER) or ch == ord('e') or ch == ord('E')) and search_results:
