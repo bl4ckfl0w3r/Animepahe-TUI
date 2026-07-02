@@ -151,17 +151,66 @@ class AnimePaheClient:
     def __init__(self, cf_clearance, user_agent):
         self.cf_clearance = cf_clearance
         self.user_agent = user_agent
-        self.session = requests.Session()
-        self.session.headers.update({
-            'User-Agent': self.user_agent,
-            'Referer': 'https://animepahe.pw/'
-        })
-        self.session.cookies.set('cf_clearance', self.cf_clearance, domain='.animepahe.pw')
+
+    def _get(self, url, headers=None, timeout=10):
+        """Perform a GET request using curl to bypass Cloudflare's JA3 fingerprint block."""
+        cmd = [
+            "curl", "-s", "-L",
+            "-A", self.user_agent,
+            "-b", f"cf_clearance={self.cf_clearance}",
+            "--connect-timeout", str(timeout),
+            "--max-time", str(timeout * 2),
+            "-w", "\n---HTTP_CODE---:%{http_code}",
+            "--compressed"
+        ]
+        
+        referer = 'https://animepahe.pw/'
+        if headers and 'Referer' in headers:
+            referer = headers['Referer']
+        cmd += ["-H", f"Referer: {referer}"]
+        
+        if headers:
+            for k, v in headers.items():
+                if k.lower() not in ('user-agent', 'referer'):
+                    cmd += ["-H", f"{k}: {v}"]
+                    
+        cmd.append(url)
+        
+        res = subprocess.run(cmd, capture_output=True, text=True)
+        if res.returncode != 0:
+            raise requests.exceptions.RequestException(f"curl failed with exit code {res.returncode}. Stderr: {res.stderr.strip()}")
+            
+        out = res.stdout
+        marker = "\n---HTTP_CODE---:"
+        idx = out.rfind(marker)
+        if idx != -1:
+            body = out[:idx]
+            try:
+                status_code = int(out[idx + len(marker):].strip())
+            except ValueError:
+                status_code = 200
+        else:
+            body = out
+            status_code = 200
+            
+        class MockResponse:
+            def __init__(self, text, status_code):
+                self.text = text
+                self.status_code = status_code
+                
+            def json(self):
+                return json.loads(self.text)
+                
+            def raise_for_status(self):
+                if self.status_code >= 400:
+                    raise requests.exceptions.HTTPError(f"HTTP Error {self.status_code}", response=self)
+                    
+        return MockResponse(body, status_code)
 
     def search_anime(self, query):
         """Search anime by name using the API."""
         url = f"https://animepahe.pw/api?m=search&q={requests.utils.quote(query)}"
-        r = self.session.get(url, timeout=10)
+        r = self._get(url, timeout=10)
         r.raise_for_status()
         return r.json()
 
@@ -171,7 +220,7 @@ class AnimePaheClient:
         page = 1
         while True:
             url = f"https://animepahe.pw/api?m=release&id={anime_slug}&sort=episode_asc&page={page}"
-            r = self.session.get(url, timeout=10)
+            r = self._get(url, timeout=10)
             r.raise_for_status()
             data = r.json()
             episodes.extend(data.get('data', []))
@@ -183,7 +232,7 @@ class AnimePaheClient:
     def get_play_buttons(self, anime_slug, episode_session):
         """Fetch play page and parse available download stream buttons."""
         url = f"https://animepahe.pw/play/{anime_slug}/{episode_session}"
-        r = self.session.get(url, timeout=10)
+        r = self._get(url, timeout=10)
         r.raise_for_status()
         
         html = r.text
@@ -204,7 +253,7 @@ class AnimePaheClient:
             'Referer': 'https://animepahe.pw/',
             'User-Agent': self.user_agent
         }
-        r = self.session.get(kwik_url, headers=headers, timeout=10)
+        r = self._get(kwik_url, headers=headers, timeout=10)
         if r.status_code != 200:
             return None, f"HTTP Error {r.status_code}"
             
@@ -426,7 +475,7 @@ class TaskManager:
                 cmd = [
                     yt_dlp_bin,
                     "--add-header", "Referer: https://kwik.cx/",
-                    "--concurrent-fragments", "4",
+                    "--impersonate", "firefox",
                     "-o", output_path,
                     m3u8_url
                 ]
